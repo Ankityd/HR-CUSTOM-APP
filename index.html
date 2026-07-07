@@ -695,6 +695,8 @@ let carQuery = '';
 let currentPage = 'billing';
 let selectedProduct = null;
 let selectedPayMode = 'Cash';
+let autoLogoutTimeout = null;
+let autoLogoutMinutes = 0; // 0 = disabled
 
 // ============================================================
 // UTILITIES
@@ -716,6 +718,39 @@ function stockStatus(stock, minStock){
   if(stock <= 5) return {cls:'critical', text:'Critical'};
   if(stock <= minStock) return {cls:'low', text:'Low Stock'};
   return {cls:'good', text:'In Stock'};
+}
+
+// ============================================================
+// AUTO LOGOUT
+// ============================================================
+function resetAutoLogoutTimer(){
+  if(autoLogoutTimeout) clearTimeout(autoLogoutTimeout);
+  if(autoLogoutMinutes > 0){
+    autoLogoutTimeout = setTimeout(() => {
+      showToast('Auto-logging out due to inactivity', 'warning');
+      logout();
+    }, autoLogoutMinutes * 60 * 1000);
+  }
+}
+
+function setupActivityTracking(){
+  const events = ['mousedown', 'keydown', 'scroll', 'touchstart', 'click'];
+  events.forEach(event => {
+    document.addEventListener(event, resetAutoLogoutTimer);
+  });
+}
+
+function loadAutoLogoutSetting(){
+  const saved = localStorage.getItem('autoLogoutMinutes');
+  if(saved !== null){
+    autoLogoutMinutes = parseInt(saved, 10) || 0;
+  }
+}
+
+function saveAutoLogoutSetting(minutes){
+  autoLogoutMinutes = minutes;
+  localStorage.setItem('autoLogoutMinutes', minutes);
+  resetAutoLogoutTimer();
 }
 
 function marginInfo(buy, sell){
@@ -792,6 +827,9 @@ async function startApp(){
   document.getElementById('user-avatar').textContent = currentUser.name.charAt(0).toUpperCase();
   document.getElementById('user-name').textContent = currentUser.name;
   document.getElementById('user-role').textContent = currentUser.role === 'admin' ? 'Administrator' : 'Helper';
+
+  loadAutoLogoutSetting();
+  setupActivityTracking();
 
   renderSidebar();
   await Promise.all([loadProducts(), loadDiscounts(), loadShop()]);
@@ -2137,6 +2175,26 @@ function renderSettingsPage(){
     </div>
 
     <div class="section-card">
+      <div class="page-toolbar" style="margin-bottom:6px;">
+        <div class="section-title" style="margin-bottom:0;"><i class="fa-solid fa-clock"></i>Auto Logout</div>
+      </div>
+      <p style="color:var(--text-2);font-size:13px;margin-bottom:14px;">Automatically log out after a period of inactivity for security.</p>
+      <div class="form-field">
+        <label>Auto Logout After</label>
+        <select id="auto-logout-select" style="background:var(--bg-1);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text-1);font-size:13px;width:100%;">
+          <option value="0" ${autoLogoutMinutes===0?'selected':''}>Disabled</option>
+          <option value="5" ${autoLogoutMinutes===5?'selected':''}>5 minutes</option>
+          <option value="10" ${autoLogoutMinutes===10?'selected':''}>10 minutes</option>
+          <option value="15" ${autoLogoutMinutes===15?'selected':''}>15 minutes</option>
+          <option value="30" ${autoLogoutMinutes===30?'selected':''}>30 minutes</option>
+          <option value="60" ${autoLogoutMinutes===60?'selected':''}>1 hour</option>
+          <option value="120" ${autoLogoutMinutes===120?'selected':''}>2 hours</option>
+        </select>
+      </div>
+      <p style="color:var(--text-3);font-size:11px;margin-top:8px;">Activity (mouse, keyboard, touch) resets the timer.</p>
+    </div>
+
+    <div class="section-card">
       <div class="section-title"><i class="fa-solid fa-shield-halved"></i>Data Safety</div>
       <p style="color:var(--text-2);font-size:13px;margin-bottom:14px;">Download a full backup of your products, discount rules, and shop info any time. Restoring will add or update products by SKU — it won't delete anything.</p>
       <div class="action-group">
@@ -2160,6 +2218,13 @@ function renderSettingsPage(){
   document.getElementById('download-backup-btn').addEventListener('click', downloadBackup);
   document.getElementById('restore-backup-btn').addEventListener('click', ()=> document.getElementById('restore-file-input').click());
   document.getElementById('restore-file-input').addEventListener('change', handleRestoreFile);
+  
+  // Auto logout setting
+  document.getElementById('auto-logout-select').addEventListener('change', (e) => {
+    const minutes = parseInt(e.target.value, 10);
+    saveAutoLogoutSetting(minutes);
+    showToast(minutes === 0 ? 'Auto-logout disabled' : `Auto-logout set to ${minutes} minutes`);
+  });
   
   // Shop details editing
   document.getElementById('edit-shop-btn').addEventListener('click', () => {
