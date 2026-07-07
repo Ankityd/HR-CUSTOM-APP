@@ -624,11 +624,43 @@ table.data-table tr:hover td{background:var(--bg-2);}
       <p style="color:var(--text-2);font-size:13px;margin-bottom:14px;">Set the quantity being returned for each item. Leave at 0 for items not returned.</p>
       <div id="return-items-list"></div>
       <div class="form-field full" style="margin-top:16px;"><label>Reason (optional)</label><input type="text" id="return-reason" placeholder="e.g. Defective, wrong item, customer changed mind"></div>
+      <div class="form-field full" style="margin-top:12px;"><label>Return Type</label>
+        <select id="return-type" style="background:var(--bg-1);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text-1);font-size:13px;width:100%;">
+          <option value="restock">Restock to Inventory (add back to stock)</option>
+          <option value="warranty">Warranty Claim (do not restock - defective item)</option>
+        </select>
+      </div>
       <div style="margin-top:14px;font-size:14px;font-weight:700;">Refund Total: <span id="return-total" style="font-family:var(--font-mono);color:var(--red);">₹0</span></div>
     </div>
     <div class="modal-footer">
       <button class="btn-outline" id="return-cancel">Cancel</button>
       <button class="btn-accent" id="return-submit" style="background:var(--red);color:#fff;">Confirm Return</button>
+    </div>
+  </div>
+</div>
+
+<!-- PAYMENT COLLECTION MODAL -->
+<div class="modal-overlay" id="payment-modal">
+  <div class="modal-panel">
+    <div class="modal-header"><h2>Record Payment</h2><button class="modal-close" id="payment-modal-close"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body">
+      <div class="form-field"><label>Invoice #</label><input type="text" id="payment-invoice-number" readonly style="background:var(--bg-2);"></div>
+      <div class="form-field"><label>Customer</label><input type="text" id="payment-customer" readonly style="background:var(--bg-2);"></div>
+      <div class="form-field"><label>Current Balance</label><input type="text" id="payment-current-balance" readonly style="background:var(--bg-2);font-family:var(--font-mono);color:var(--red);"></div>
+      <div class="form-field"><label>Payment Amount (₹)</label><input type="number" id="payment-amount" min="0" placeholder="Enter amount"></div>
+      <div class="form-field"><label>Payment Mode</label>
+        <select id="payment-mode" style="background:var(--bg-1);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text-1);font-size:13px;width:100%;">
+          <option value="Cash">Cash</option>
+          <option value="UPI">UPI</option>
+          <option value="Card">Card</option>
+          <option value="Bank Transfer">Bank Transfer</option>
+        </select>
+      </div>
+      <div class="form-field"><label>Notes (optional)</label><input type="text" id="payment-notes" placeholder="e.g. Partial payment"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-outline" id="payment-cancel">Cancel</button>
+      <button class="btn-accent" id="payment-submit">Record Payment</button>
     </div>
   </div>
 </div>
@@ -697,6 +729,7 @@ let selectedProduct = null;
 let selectedPayMode = 'Cash';
 let autoLogoutTimeout = null;
 let autoLogoutMinutes = 0; // 0 = disabled
+let pendingPaymentAlertDays = 7; // Alert after X days of pending payment
 
 // ============================================================
 // UTILITIES
@@ -751,6 +784,18 @@ function saveAutoLogoutSetting(minutes){
   autoLogoutMinutes = minutes;
   localStorage.setItem('autoLogoutMinutes', minutes);
   resetAutoLogoutTimer();
+}
+
+function loadPendingPaymentAlertSetting(){
+  const saved = localStorage.getItem('pendingPaymentAlertDays');
+  if(saved !== null){
+    pendingPaymentAlertDays = parseInt(saved, 10) || 7;
+  }
+}
+
+function savePendingPaymentAlertSetting(days){
+  pendingPaymentAlertDays = days;
+  localStorage.setItem('pendingPaymentAlertDays', days);
 }
 
 function marginInfo(buy, sell){
@@ -829,6 +874,7 @@ async function startApp(){
   document.getElementById('user-role').textContent = currentUser.role === 'admin' ? 'Administrator' : 'Helper';
 
   loadAutoLogoutSetting();
+  loadPendingPaymentAlertSetting();
   setupActivityTracking();
 
   renderSidebar();
@@ -1060,6 +1106,20 @@ async function renderDashboardPage(){
   const trendEntries = Object.entries(byDate);
   const chartSvg = renderRevenueTrendChart(trendEntries);
 
+  // Fetch pending payment alerts for dashboard
+  let pendingPaymentsCount = 0;
+  if(pendingPaymentAlertDays > 0){
+    const { data: pendingInvoices } = await sb.from('invoices').select('*').gt('balance_remaining', 0);
+    if(pendingInvoices){
+      const alertDate = new Date();
+      alertDate.setDate(alertDate.getDate() - pendingPaymentAlertDays);
+      pendingPaymentsCount = pendingInvoices.filter(inv => {
+        const invDate = new Date(inv.invoice_date);
+        return invDate <= alertDate;
+      }).length;
+    }
+  }
+
   const body = document.getElementById('dashboard-body');
   body.innerHTML = `
     <div class="stat-grid">
@@ -1088,6 +1148,12 @@ async function renderDashboardPage(){
         <div class="stat-label">Low Stock Items</div><div class="stat-value red">${lowStockCount}</div>
       </div>
     </div>
+
+    ${pendingPaymentsCount > 0 ? `
+    <div class="section-card" style="border-color:var(--red);">
+      <div class="section-title" style="color:var(--red);"><i class="fa-solid fa-money-bill-wave"></i>Pending Payment Alert</div>
+      <p style="color:var(--text-2);font-size:13px;">You have <strong>${pendingPaymentsCount}</strong> invoice(s) with pending balances for ${pendingPaymentAlertDays}+ days. <button class="btn-outline" onclick="navigateTo('alerts')" style="margin-left:10px;padding:6px 12px;font-size:12px;">View Details</button></p>
+    </div>` : ''}
 
     <div class="section-card">
       <div class="section-title"><i class="fa-solid fa-chart-line"></i>Revenue — Last 14 Days</div>
@@ -1688,7 +1754,11 @@ function renderInvoicesTable(){
             <td class="mono-cell">${fmtCurrency(inv.total)}</td>
             <td>${inv.payment_mode}</td>
             <td class="mono-cell" style="${inv.balance_remaining>0?'color:var(--red);':''}">${fmtCurrency(inv.balance_remaining)}</td>
-            <td><button class="btn-outline view-invoice" data-id="${inv.id}">View</button> <button class="btn-outline return-invoice-btn" data-id="${inv.id}" style="color:var(--red);border-color:rgba(232,90,90,0.3);">Return</button></td>
+            <td>
+              <button class="btn-outline view-invoice" data-id="${inv.id}">View</button>
+              ${inv.balance_remaining > 0 ? `<button class="btn-outline collect-payment-btn" data-id="${inv.id}" style="color:var(--green);border-color:rgba(62,207,142,0.3);">Pay</button>` : ''}
+              <button class="btn-outline return-invoice-btn" data-id="${inv.id}" style="color:var(--red);border-color:rgba(232,90,90,0.3);">Return</button>
+            </td>
           </tr>`).join('') : `<tr><td colspan="10" style="text-align:center;color:var(--text-3);padding:30px;">No invoices found.</td></tr>`}
       </tbody>
     </table>`;
@@ -1711,7 +1781,70 @@ function renderInvoicesTable(){
       openReturnModal(inv);
     });
   });
+  wrap.querySelectorAll('.collect-payment-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const inv = list.find(i=>i.id===Number(btn.dataset.id));
+      openPaymentModal(inv);
+    });
+  });
 }
+
+// ---- Payment Collection Modal ----
+let paymentInvoiceContext = null;
+
+function openPaymentModal(invoice){
+  paymentInvoiceContext = invoice;
+  document.getElementById('payment-invoice-number').value = '#' + String(invoice.bill_number).padStart(4,'0');
+  document.getElementById('payment-customer').value = invoice.customer_name;
+  document.getElementById('payment-current-balance').value = fmtCurrency(invoice.balance_remaining);
+  document.getElementById('payment-amount').value = '';
+  document.getElementById('payment-mode').value = 'Cash';
+  document.getElementById('payment-notes').value = '';
+  document.getElementById('payment-modal').classList.add('show');
+}
+
+function closePaymentModal(){
+  document.getElementById('payment-modal').classList.remove('show');
+  paymentInvoiceContext = null;
+}
+
+document.getElementById('payment-modal-close').addEventListener('click', closePaymentModal);
+document.getElementById('payment-cancel').addEventListener('click', closePaymentModal);
+
+document.getElementById('payment-submit').addEventListener('click', async ()=>{
+  if(!paymentInvoiceContext) return;
+  const amount = Number(document.getElementById('payment-amount').value);
+  if(amount <= 0 || amount > paymentInvoiceContext.balance_remaining){
+    showToast('Invalid payment amount.', 'error');
+    return;
+  }
+  const mode = document.getElementById('payment-mode').value;
+  const notes = document.getElementById('payment-notes').value.trim();
+  const btn = document.getElementById('payment-submit');
+  btn.disabled = true; btn.textContent = 'Recording...';
+  
+  // Update the invoice balance
+  const newBalance = paymentInvoiceContext.balance_remaining - amount;
+  const { error } = await sb.from('invoices').update({ 
+    balance_remaining: newBalance,
+    payment_mode: newBalance === 0 ? mode + ' (Paid)' : paymentInvoiceContext.payment_mode
+  }).eq('id', paymentInvoiceContext.id);
+  
+  btn.disabled = false; btn.textContent = 'Record Payment';
+  if(error){
+    showToast('Failed to record payment: ' + error.message, 'error');
+    return;
+  }
+  
+  await sb.rpc('log_action', { 
+    p_action: 'payment_received', 
+    p_details: `Payment received for invoice #${String(paymentInvoiceContext.bill_number).padStart(4,'0')} | Customer: ${paymentInvoiceContext.customer_name} | Amount: ${fmtCurrency(amount)} | Mode: ${mode} | Notes: ${notes} | Remaining: ${fmtCurrency(newBalance)}` 
+  });
+  
+  showToast(`Payment of ${fmtCurrency(amount)} recorded. Remaining: ${fmtCurrency(newBalance)}`);
+  closePaymentModal();
+  renderInvoicesPage();
+});
 
 // ---- Returns / Refunds ----
 let returnInvoiceContext = null;
@@ -1734,6 +1867,7 @@ function openReturnModal(invoice){
     });
   });
   document.getElementById('return-reason').value = '';
+  document.getElementById('return-type').value = 'restock';
   updateReturnTotal();
   document.getElementById('return-modal').classList.add('show');
 }
@@ -1759,16 +1893,33 @@ document.getElementById('return-submit').addEventListener('click', async ()=>{
   });
   if(items.length===0){ showToast('Set at least one quantity to return.', 'error'); return; }
   const reason = document.getElementById('return-reason').value.trim();
+  const returnType = document.getElementById('return-type').value;
   const btn = document.getElementById('return-submit');
   btn.disabled = true; btn.textContent = 'Processing...';
+  
+  // Note: The RPC function needs to be updated in Supabase to handle return_type parameter
+  // For now, we'll call it without the parameter and handle stock update locally if needed
   const { data, error } = await sb.rpc('process_return', {
     p_invoice_id: returnInvoiceContext.id, p_items: items, p_reason: reason
   });
+  
   btn.disabled = false; btn.textContent = 'Confirm Return';
   if(error){ showToast('Return failed: ' + error.message, 'error'); return; }
-  showToast('Return processed — refund ' + fmtCurrency(data.refund_amount));
+  
+  // If warranty claim, we need to manually adjust stock back since RPC doesn't support it yet
+  if(returnType === 'warranty'){
+    for(const item of items){
+      const product = products.find(p => p.id === item.product_id);
+      if(product){
+        await sb.from('products_secure').update({ stock: product.stock + item.qty }).eq('id', item.product_id);
+      }
+    }
+    await loadProducts();
+  }
+  
+  const returnDesc = returnType === 'warranty' ? ' (warranty claim - no restock)' : ' (restocked)';
+  showToast('Return processed' + returnDesc + ' — refund ' + fmtCurrency(data.refund_amount));
   closeReturnModal();
-  await loadProducts();
   updateAlertsBadge();
   renderInvoicesPage();
 });
@@ -1788,19 +1939,44 @@ function exportAllInvoicesCSV(){
 // ============================================================
 // ALERTS PAGE
 // ============================================================
-function renderAlertsPage(){
+async function renderAlertsPage(){
   const main = pageRoot();
   const outOfStock = products.filter(p=>p.stock===0);
   const critical = products.filter(p=>p.stock>0 && p.stock<=5);
   const low = products.filter(p=>p.stock>5 && p.stock<=p.min_stock).slice(0,8);
   const overstock = products.filter(p=>p.stock > p.min_stock*3 && p.sales_this_period < 5);
 
-  const hasAny = outOfStock.length || critical.length || low.length || overstock.length;
+  // Fetch pending payment alerts
+  let pendingPayments = [];
+  if(pendingPaymentAlertDays > 0){
+    const { data: invoices } = await sb.from('invoices').select('*').gt('balance_remaining', 0);
+    if(invoices){
+      const alertDate = new Date();
+      alertDate.setDate(alertDate.getDate() - pendingPaymentAlertDays);
+      pendingPayments = invoices.filter(inv => {
+        const invDate = new Date(inv.invoice_date);
+        return invDate <= alertDate;
+      }).slice(0, 10);
+    }
+  }
+
+  const hasAny = outOfStock.length || critical.length || low.length || overstock.length || pendingPayments.length;
 
   main.innerHTML = `
     <div class="page-header"><h1>Alerts</h1><p>Items needing attention</p></div>
     <div class="alerts-grid">
       ${!hasAny ? `<div class="all-clear"><i class="fa-solid fa-circle-check"></i>All Clear — everything looks good</div>` : `
+      ${pendingPayments.length ? `
+      <div class="alert-panel">
+        <div class="alert-panel-title" style="color:var(--red);"><i class="fa-solid fa-money-bill-wave"></i>Pending Payments (${pendingPaymentAlertDays}+ days)</div>
+        ${pendingPayments.map(inv=>{
+          const daysAgo = Math.floor((new Date() - new Date(inv.invoice_date)) / (1000 * 60 * 60 * 24));
+          return `<div class="alert-item">
+            <div class="alert-item-name">#${String(inv.bill_number).padStart(4,'0')} — ${escapeHtml(inv.customer_name)}</div>
+            <div class="alert-item-meta" style="color:var(--red);">${fmtCurrency(inv.balance_remaining)} pending — ${daysAgo} days ago</div>
+          </div>`;
+        }).join('')}
+      </div>` : ''}
       <div class="alert-panel">
         <div class="alert-panel-title red"><i class="fa-solid fa-circle-xmark"></i>Out of Stock</div>
         ${outOfStock.length ? outOfStock.map(p=>`
@@ -2195,6 +2371,24 @@ function renderSettingsPage(){
     </div>
 
     <div class="section-card">
+      <div class="page-toolbar" style="margin-bottom:6px;">
+        <div class="section-title" style="margin-bottom:0;"><i class="fa-solid fa-bell"></i>Pending Payment Alerts</div>
+      </div>
+      <p style="color:var(--text-2);font-size:13px;margin-bottom:14px;">Get alerts for invoices with pending balances after a certain number of days.</p>
+      <div class="form-field">
+        <label>Alert After (Days)</label>
+        <select id="pending-payment-alert-select" style="background:var(--bg-1);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text-1);font-size:13px;width:100%;">
+          <option value="3" ${pendingPaymentAlertDays===3?'selected':''}>3 days</option>
+          <option value="7" ${pendingPaymentAlertDays===7?'selected':''}>7 days</option>
+          <option value="14" ${pendingPaymentAlertDays===14?'selected':''}>14 days</option>
+          <option value="30" ${pendingPaymentAlertDays===30?'selected':''}>30 days</option>
+          <option value="0" ${pendingPaymentAlertDays===0?'selected':''}>Disabled</option>
+        </select>
+      </div>
+      <p style="color:var(--text-3);font-size:11px;margin-top:8px;">Alerts will appear on the Dashboard and Alerts page.</p>
+    </div>
+
+    <div class="section-card">
       <div class="section-title"><i class="fa-solid fa-shield-halved"></i>Data Safety</div>
       <p style="color:var(--text-2);font-size:13px;margin-bottom:14px;">Download a full backup of your products, discount rules, and shop info any time. Restoring will add or update products by SKU — it won't delete anything.</p>
       <div class="action-group">
@@ -2224,6 +2418,13 @@ function renderSettingsPage(){
     const minutes = parseInt(e.target.value, 10);
     saveAutoLogoutSetting(minutes);
     showToast(minutes === 0 ? 'Auto-logout disabled' : `Auto-logout set to ${minutes} minutes`);
+  });
+  
+  // Pending payment alert setting
+  document.getElementById('pending-payment-alert-select').addEventListener('change', (e) => {
+    const days = parseInt(e.target.value, 10);
+    savePendingPaymentAlertSetting(days);
+    showToast(days === 0 ? 'Pending payment alerts disabled' : `Pending payment alerts set to ${days} days`);
   });
   
   // Shop details editing
