@@ -721,8 +721,9 @@ input[type="date"], input[type="time"] {
         <button class="btn-accent" id="add-labour-btn">Add Labour to Cart</button>
       </div>
       
-      <button class="btn-danger" id="clear-cart-btn">Clear Cart</button>
-    </div> <!-- This closing div is CRITICAL to close the cart-panel -->
+            <button class="btn-danger" id="clear-cart-btn">Clear Cart</button>
+    </div> <!-- closes cart-actions -->
+</div> <!-- closes cart-panel -->
 
 <!-- INVOICE -->
 <div id="invoice-overlay"><div class="invoice-wrap" id="invoice-content"></div></div>
@@ -1347,7 +1348,6 @@ let warranties = [];
 let loginHistory = [];
 let activeDevices = [];
 let priceHistory = [];
-let heldBills = []; // For hold bill functionality
 let isLabourOnly = false; // For labour-only invoices
 let otpSettings = null;
 let otpTriggers = null;
@@ -1922,6 +1922,7 @@ function renderSidebar(){
     btn.addEventListener('click', () => { navigateTo(btn.dataset.page); closeMobileSidebar(); });
   });
   updateAlertsBadge();
+  applyFeatureFlags(); // ← ADD THIS so flags are re-applied every time
 }
 
 function updateAlertsBadge(){
@@ -1948,7 +1949,6 @@ function closeMobileSidebar(){
 // DATA LOADING
 // ============================================================
 async function loadProducts(){
-  const { data: { user } } = await sb.auth.getUser(); // wait, they do loadProducts
   const { data, error } = await sb.from('products_secure').select('*').order('name');
   if(error){ showToast('Failed to load products.', 'error'); return; }
   products = data;
@@ -2526,11 +2526,8 @@ async function renderDashboardPage(){
     invoices.forEach(inv=>{
       const items = inv.invoice_items || [];
       items.forEach((it,idx)=>{
-        rows.push([
-          '#'+String(inv.bill_number).padStart(4,'0'), inv.invoice_date, inv.invoice_time, inv.customer_name, inv.customer_phone,
-          it.name, it.qty, it.price, it.total,
-          idx===0 ? inv.discount : '', idx===0 ? inv.total : '',
-          inv.payment_mode, inv.balance_remaining
+                rows.push(['#'+String(inv.bill_number).padStart(4,'0'), fmtDate(inv.invoice_date), inv.invoice_time,
+          inv.customer_name, inv.customer_phone, it.name, it.qty, it.price, it.total || (it.qty * it.price), inv.discount, inv.total, inv.payment_mode, inv.balance_remaining
         ]);
       });
     });
@@ -2548,9 +2545,9 @@ function handleDashboardCardClick(action, invoices, productMap, date, dashboardR
     case 'show-profit':
       showRevenueProfitModal(invoices, productMap, action === 'show-profit', dashboardReturns);      break;
     case 'show-bills':
-      invoicesPageState = { bill:'', customer:'', phone:'', date };
-      navigateTo('invoices');
-      break;
+  invoicesPageState = { bill:'', customer:'', phone:'', date, type:'all', sortBy:'date', page:1 };
+  navigateTo('invoices');
+  break;
     case 'show-items-sold':
       showItemsSoldModal(invoices, productMap);
       break;
@@ -2632,11 +2629,11 @@ function showItemsSoldModal(invoices, productMap){
   const allItems = [];
   invoices.forEach(inv=>{
     (inv.invoice_items||[]).forEach(it=>{
-      allItems.push({
+            allItems.push({
         name: it.name,
         qty: it.qty,
         price: it.price,
-        total: it.total,
+        total: it.total || (it.qty * it.price), // Fallback calculation
         bill: inv.bill_number,
         customer: inv.customer_name,
         time: inv.invoice_time
@@ -2647,7 +2644,7 @@ function showItemsSoldModal(invoices, productMap){
   main.innerHTML = `
     <div class="page-header">
       <h1>Items Sold</h1>
-      <p>${fmtDate(dashboardDate)} — ${allItems.length} items</p>
+<p>${fmtDate(dashboardStartDate)} — ${allItems.length} items</p>
     </div>
     <div class="section-card">
       <div class="table-scroll">
@@ -2876,8 +2873,9 @@ function openProductModal(id){
   const catSel = document.getElementById('pf-category');
   catSel.innerHTML = CATEGORIES.map(c=>`<option>${escapeHtml(c)}</option>`).join('');
 
-  if(id){
+    if(id){
     const p = products.find(x=>x.id===id);
+    if(!p) { showToast('Product not found.', 'error'); return; }
     document.getElementById('modal-title').textContent = 'Edit Product';
     document.getElementById('pf-name').value = p.name;
     document.getElementById('pf-sku').value = p.sku;
@@ -2988,12 +2986,12 @@ document.getElementById('modal-save').addEventListener('click', async ()=>{
     showToast(msg, 'error');
     return;
   }
-  await sb.rpc('log_rich_action', {
+    await sb.rpc('log_rich_action', {
     p_module: 'Inventory',
     p_action: editingProductId ? 'Product Edited' : 'Product Added',
     p_item_name: name,
     p_description: `Saved: ${name} (SKU: ${sku}) | Buy: ${fmtCurrency(buy)} | Sell: ${fmtCurrency(sell)} | Stock: ${payload.stock}`,
-    p_before_val: editingProductId ? { name: selectedProduct?.name, price: selectedProduct?.sell_price, stock: selectedProduct?.stock } : null,
+    p_before_val: editingProductId ? { name: existingProduct?.name, price: existingProduct?.sell_price, stock: existingProduct?.stock } : null,
     p_after_val: { name, price: sell, stock: payload.stock },
     p_severity: 'Normal'
   });
@@ -3234,12 +3232,22 @@ async function renderInvoicesTable(){
             <td>${item.items_count}</td>
             <td class="mono-cell">${fmtCurrency(item.total)}</td>
             <td class="mono-cell" style="${item.balance>0?'color:var(--red);':''}">${fmtCurrency(item.balance)}</td>
-            <td>
+                        <td style="white-space: nowrap;">
               ${isPurchase ? 
                 `<button class="btn-outline view-purchase-btn" data-id="${item.id}">View</button>` :
                 `<button class="btn-outline view-invoice" data-id="${item.id}">View</button>
                  ${item.balance > 0 ? `<button class="btn-outline collect-payment-btn" data-id="${item.id}" style="color:var(--green);border-color:rgba(62,207,142,0.3);">Pay</button>` : ''}
-                 <button class="btn-outline return-invoice-btn" data-id="${item.id}" style="color:var(--red);border-color:rgba(232,90,90,0.3);">Return</button>`
+                 <button class="btn-outline return-invoice-btn" data-id="${item.id}" style="color:var(--red);border-color:rgba(232,90,90,0.3);">Return</button>
+                 ${(window.allGroupedReturns[item.id] && Object.keys(window.allGroupedReturns[item.id]).length > 0) ? 
+                   `<span class="inv-menu" style="position:relative; display:inline-block; margin-left:4px;">
+                     <i class="fa-solid fa-ellipsis-vertical menu-chevron" onclick="toggleReturnMenu(${item.id})"></i>
+                     <div class="ret-dropdown-menu" id="ret-menu-${item.id}">
+                       ${Object.keys(window.allGroupedReturns[item.id]).map(retNum => `
+                         <div class="menu-item" onclick="viewReturnInvoice(${item.id}, '${retNum}')">View Return ${retNum.slice(-4)}</div>
+                       `).join('')}
+                     </div>
+                   </span>` : ''
+                 }`
               }
             </td>
           </tr>`;
@@ -3291,10 +3299,10 @@ function viewOriginalInvoice(invId) {
     customer_phone: inv.customer_phone,
     payment_mode: inv.payment_mode, 
     balance_remaining: inv.balance_remaining,
-    items: (inv.invoice_items||[]).map(it => ({name: it.name, sku: it.sku, qty: it.qty, total: it.total, price: it.price})),
-    subtotal: inv.subtotal, 
-    discount: inv.discount, 
-    total: inv.total
+    items: (inv.invoice_items||[]).map(it => ({name: it.name, sku: it.sku, qty: it.qty, total: it.total || (it.qty * it.price), price: it.price})),
+          subtotal: inv.subtotal || 0, 
+    discount: inv.discount || 0, 
+    total: inv.total || inv.subtotal || 0
   });
 }
 
@@ -3421,12 +3429,13 @@ async function openReturnModal(invoice){
     returnedMap[r.product_id] = (returnedMap[r.product_id] || 0) + r.quantity;
   });
 
-  list.innerHTML = (invoice.invoice_items||[]).map(it => {
+    list.innerHTML = (invoice.invoice_items||[]).map(it => {
+    if(!it.product_id) return ''; // CRITICAL: Skip labour items or items without a product ID
     const returnedQty = returnedMap[it.product_id] || 0;
     const maxAllowed = it.qty - returnedQty;
     if(maxAllowed <= 0) return ''; // Hide items fully returned
     return `
-    <div class="return-item-row" data-product-id="${it.product_id}" data-price="${it.price}" data-max="${maxAllowed}">
+        <div class="return-item-row" data-product-id="${it.product_id}" data-name="${escapeHtml(it.name)}" data-price="${it.price}" data-max="${maxAllowed}">
       <span class="return-item-name">${escapeHtml(it.name)} <span style="color:var(--text-3);">(Sold: ${it.qty}, Already Returned: ${returnedQty})</span></span>
       <input type="number" class="return-qty-input" value="0" min="0" max="${maxAllowed}">
     </div>`;
@@ -3462,8 +3471,8 @@ document.getElementById('return-submit').addEventListener('click', async ()=>{
   const items = [];
   document.querySelectorAll('#return-items-list .return-item-row').forEach(row=>{
     const qty = Number(row.querySelector('.return-qty-input').value) || 0;
-    if(qty > 0){
-      items.push({ product_id: Number(row.dataset.productId), name: row.querySelector('.return-item-name').textContent, qty, price: Number(row.dataset.price) });
+        if(qty > 0){
+      items.push({ product_id: Number(row.dataset.productId), name: row.dataset.name, qty, price: Number(row.dataset.price) });
     }
   });
   if(items.length===0){ showToast('Set at least one quantity to return.', 'error'); return; }
@@ -3505,8 +3514,8 @@ function exportAllInvoicesCSV(){
   const rows = [];
   (window.__allInvoices||[]).forEach(inv=>{
     (inv.invoice_items||[]).forEach(it=>{
-      rows.push(['#'+String(inv.bill_number).padStart(4,'0'), fmtDate(inv.invoice_date), inv.invoice_time,
-        inv.customer_name, inv.customer_phone, it.name, it.qty, it.price, it.total, inv.discount, inv.total, inv.payment_mode, inv.balance_remaining]);
+            rows.push(['#'+String(inv.bill_number).padStart(4,'0'), fmtDate(inv.invoice_date), inv.invoice_time,
+        inv.customer_name, inv.customer_phone, it.name, it.qty, it.price, it.total || (it.qty * it.price), inv.discount || 0, inv.total || inv.subtotal || 0, inv.payment_mode || '—', inv.balance_remaining || 0]);
     });
   });
   downloadCSV('all_invoices.csv',
@@ -3533,10 +3542,10 @@ async function renderExpensesPage(){
       <button class="btn-accent" onclick="openExpenseModal()"><i class="fa-solid fa-plus"></i> Record Expense</button>
     </div>
     
-    <!-- KPI & Chart Row -->
-    <div class="dash-row" style="grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
+        <!-- KPI & Chart Row -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
       <!-- Left: KPI Cards -->
-      <div class="dash-col">
+      <div style="display: flex; flex-direction: column; gap: 20px;">
         <div class="stat-card">
           <div class="stat-label"><i class="fa-solid fa-calendar-days" style="color:var(--blue); margin-right:6px;"></i>Total This Month</div>
           <div class="stat-value red" id="kpi-total-month">₹0</div>
@@ -4287,7 +4296,9 @@ function renderSettingsTab() {
 
 function renderShopSettingsTab(panel) {
   const s = appSettings.shop;
-  panel.innerHTML = `
+  
+  // 1. Build the entire HTML string at once
+  let html = `
     <h2 style="font-size:18px; margin-bottom:20px;">🏪 Shop & Invoice Details</h2>
     <div class="form-row">
       <div class="form-field"><label>Shop Name</label><input type="text" id="set-shop-name" value="${escapeHtml(s.name||'')}"></div>
@@ -4323,20 +4334,20 @@ function renderShopSettingsTab(panel) {
     </div>
 
     <button class="btn-accent" style="margin-top:24px;" onclick="saveShopSettings()">Save Shop Settings</button>
-  `;
 
-  // Setup toggles
-    panel.querySelectorAll('.toggle-switch').forEach(toggle => {
-    toggle.addEventListener('click', () => toggle.classList.toggle('active'));
-  });
-
-  // --- DISCOUNT RULES SECTION ---
-  panel.innerHTML += `
     <h3 style="margin-top:24px; margin-bottom:16px; font-size:15px;">🤖 Automated Discount Rules</h3>
     <p style="color:var(--text-2); font-size:13px; margin-bottom:20px;">The system will automatically apply the highest eligible tier based on the cart subtotal.</p>
     <button class="btn-accent" id="add-rule-btn" style="margin-bottom:16px;"><i class="fa-solid fa-plus"></i> Add Discount Rule</button>
     <div id="rules-list" style="background:var(--bg-2); padding:16px; border-radius:8px; border:1px solid var(--border);"></div>
   `;
+  
+  // 2. Assign all HTML to the panel at once
+  panel.innerHTML = html;
+
+  // 3. NOW attach event listeners (they will no longer be wiped out)
+  panel.querySelectorAll('.toggle-switch').forEach(toggle => {
+    toggle.addEventListener('click', () => toggle.classList.toggle('active'));
+  });
 
   panel.querySelector('#add-rule-btn').addEventListener('click', () => openRuleModal(null));
   renderRulesList();
@@ -4559,12 +4570,20 @@ async function renderUsersSettingsTab(panel) {
   // Listeners
   panel.querySelectorAll('.override-password-btn').forEach(btn => btn.addEventListener('click', () => handleAdminPasswordOverride(btn.dataset.id, btn.dataset.name)));
   
-  panel.querySelector('#add-user-btn').addEventListener('click', () => {
+    panel.querySelector('#add-user-btn').addEventListener('click', () => {
     document.getElementById('user-full-name').value = '';
     document.getElementById('user-password').value = '';
     document.getElementById('user-role').value = 'helper';
     document.getElementById('username-preview').style.display = 'none';
+    
+    // Uncheck all first
     document.querySelectorAll('#user-modal input[type="checkbox"]').forEach(cb => cb.checked = false);
+    
+    // Apply sensible default permissions for new users
+    const defaultPerms = ['perm-billing', 'perm-dashboard', 'perm-inventory', 'perm-invoices', 'perm-customers', 'perm-suppliers', 'perm-purchases', 'perm-expenses', 'perm-reports', 'perm-business', 'perm-alerts', 'perm-demand', 'perm-insights', 'perm-system', 'perm-activity', 'perm-export-data'];
+    defaultPerms.forEach(id => { const el = document.getElementById(id); if(el) el.checked = true; });
+    
+    document.getElementById('user-modal-title').textContent = 'Add New User';
     document.getElementById('user-modal').classList.add('show');
   });
 
@@ -5793,6 +5812,7 @@ let custPageState = { search: '', sortBy: 'name_asc' };
 
 function renderCustomersTable(){
   const wrap = document.getElementById('customers-table-wrap');
+  if(!wrap) return; // ← ADD THIS
   const searchVal = document.getElementById('cust-search')?.value.toLowerCase() || '';
   const sortVal = document.getElementById('cust-sortby')?.value || 'name_asc';
   
@@ -6087,6 +6107,7 @@ async function loadSupplierPayments(){
 
 function renderSuppliersTable(){
   const wrap = document.getElementById('suppliers-table-wrap');
+  if(!wrap) return; // ← ADD THIS
   const searchVal = supState.search.toLowerCase();
   
   // Calculate Total Spend & Payments per supplier
@@ -6592,10 +6613,14 @@ function openPurchaseModal(){
   document.getElementById('pur-product').value = '';
   document.getElementById('pur-product-autocomplete').style.display = 'none';
   
-  document.getElementById('pur-qty').value = 1;
+    document.getElementById('pur-qty').value = 1;
   document.getElementById('pur-cost').value = '';
+  document.getElementById('pur-paid').value = 0;
+  document.getElementById('pur-pay-mode').value = 'Cash';
+  document.getElementById('pur-barcode-input').value = '';
   document.getElementById('pur-notes').value = '';
   updatePurchaseTotal();
+  updateBalanceDue();
   document.getElementById('purchase-modal-title').textContent = 'New Purchase Entry';
   document.getElementById('purchase-modal').classList.add('show');
 }
@@ -6856,12 +6881,13 @@ async function savePurchase(){
     return;
   }
 
-  // 1. Update product stock in Inventory automatically for all items
+    // 1. Update product stock in Inventory automatically for all items
   for(const item of itemsToSave) {
     const product = products.find(p => p.id === item.product_id);
     if(product){
       const newStock = product.stock + item.quantity;
-      await sb.from('products').update({ stock: newStock, buy_price: item.unit_cost }).eq('id', item.product_id);
+      await sb.from('products_secure').update({ stock: newStock, buy_price: item.unit_cost }).eq('id', item.product_id);
+      product.stock = newStock; // CRITICAL: Update local state so the next item calculates correctly
     }
   }
 
@@ -6960,13 +6986,13 @@ async function generateSalesReport(){
     showToast('No invoice data available.', 'warning');
     return;
   }
-  const rows = invoices.map(inv => [
+    const rows = invoices.map(inv => [
     fmtDate(inv.invoice_date),
     String(inv.bill_number).padStart(4,'0'),
     escapeHtml(inv.customer_name),
-    inv.payment_mode,
-    fmtCurrency(inv.total),
-    fmtCurrency(inv.balance_remaining)
+    inv.payment_mode || '—',
+    fmtCurrency(inv.total || inv.subtotal || 0),
+    fmtCurrency(inv.balance_remaining || 0)
   ]);
   downloadCSV('sales_report.csv', ['Date', 'Bill #', 'Customer', 'Payment Mode', 'Total', 'Balance'], rows);
   showToast('Sales report generated.');
@@ -6992,13 +7018,13 @@ async function generatePurchaseReport(){
 }
 
 async function generateExpenseReport(){
-  const { data: expensesData } = await sb.from('expenses').select('*').order('created_at', {ascending:false});
+    const { data: expensesData } = await sb.from('expenses').select('*').order('expense_date', {ascending:false});
   if(!expensesData || expensesData.length === 0){
     showToast('No expense data available.', 'warning');
     return;
   }
   const rows = expensesData.map(ex => [
-    fmtDate(ex.created_at),
+    fmtDate(ex.expense_date),
     escapeHtml(ex.category),
     escapeHtml(ex.description||'—'),
     fmtCurrency(ex.amount)
@@ -7407,19 +7433,19 @@ function renderDualBarChart(entries) {
     const yRev = h - padBottom - revH;
     const yExp = h - padBottom - expH;
 
-    let revText = '';
+        let revText = '';
     if (e.revenue > 0) {
-      revText = `<text x="${x + barWidth/2}" y="${yRev - 4}" text-anchor="middle" fill="var(--text-1)" font-size="10" font-family="var(--font-mono)">${Math.round(e.revenue/1000)}k</text>`;
+      revText = `<text x="${x + barWidth/2}" y="${yRev - 4}" text-anchor="middle" style="fill:var(--text-1); font-family:var(--font-mono);" font-size="10">${Math.round(e.revenue/1000)}k</text>`;
     }
 
     return `
-      <g>
-        <rect x="${x}" y="${yRev}" width="${barWidth}" height="${revH}" rx="3" fill="var(--green)"></rect>
-        <rect x="${x + barWidth + 2}" y="${yExp}" width="${barWidth}" height="${expH}" rx="3" fill="var(--red)"></rect>
-        <text x="${x + barWidth/2 + 1}" y="${h - 10}" text-anchor="middle" fill="var(--text-3)" font-size="11" font-family="var(--font-mono)">${e.month}</text>
-        ${revText}
-      </g>
-    `;
+  <g>
+    <rect x="${x}" y="${yRev}" width="${barWidth}" height="${revH}" rx="3" style="fill:var(--green);"></rect>
+    <rect x="${x + barWidth + 2}" y="${yExp}" width="${barWidth}" height="${expH}" rx="3" style="fill:var(--red);"></rect>
+    <text x="${x + barWidth/2 + 1}" y="${h - 10}" text-anchor="middle" style="fill:var(--text-3); font-family:var(--font-mono);" font-size="11">${e.month}</text>
+    ${revText}
+  </g>
+`;
   }).join('');
 
   return `
@@ -8091,22 +8117,19 @@ function renderCartBadge(){
   badge.style.display = totalQty>0 ? 'flex' : 'none';
 }
 
-function openCart(){
+async function openCart(){
   document.getElementById('cart-overlay').classList.add('show');
   document.getElementById('cart-panel').classList.add('show');
   
-  // Populate Customer Dropdown
-  const custSelect = document.getElementById('customer-name');
-  custSelect.innerHTML = '<option value="">Walk-in Customer</option>';
-  customers.forEach(c => {
-    const option = document.createElement('option');
-    option.value = c.id;
-    option.textContent = `${c.name} (${c.phone || 'No Phone'})`;
-    custSelect.appendChild(option);
-  });
-  // Clear phone field since a selection hasn't been made yet
+  // Ensure customers are loaded for the auto-fill feature
+  if(customers.length === 0) await loadCustomers();
+  
+  // Clear previous entries
+  document.getElementById('customer-name').value = '';
   document.getElementById('customer-phone').value = '';
-
+  document.getElementById('customer-id-hidden').value = '';
+  document.getElementById('balance-remaining').value = '0';
+  
   renderCart();
 }
 function closeCart(){
@@ -8116,52 +8139,41 @@ function closeCart(){
 document.getElementById('cart-fab').addEventListener('click', openCart);
 document.getElementById('cart-close').addEventListener('click', closeCart);
 document.getElementById('cart-overlay').addEventListener('click', closeCart);
-// Smart Auto-fill for Customer Name
+// Smart Auto-fill for Customer Name (Exact match prevents jumping text)
 document.getElementById('customer-name').addEventListener('input', (e) => {
   const typedName = e.target.value.toLowerCase();
   const hiddenId = document.getElementById('customer-id-hidden');
   
   if(typedName === '') {
     hiddenId.value = '';
-    document.getElementById('customer-phone').value = '';
     return;
   }
   
-  const match = customers.find(c => c.name.toLowerCase().includes(typedName));
+  const match = customers.find(c => c.name.toLowerCase() === typedName);
   if(match) {
     document.getElementById('customer-phone').value = match.phone || '';
-    hiddenId.value = match.id; // Store the ID
+    hiddenId.value = match.id; 
   } else {
-    hiddenId.value = ''; // No match, so it's a walk-in
+    hiddenId.value = ''; 
   }
 });
 
-// Smart Auto-fill for Mobile Number
+// Smart Auto-fill for Mobile Number (Exact match prevents jumping text)
 document.getElementById('customer-phone').addEventListener('input', (e) => {
-  const typedPhone = e.target.value.replace(/\D/g, ''); // Remove non-digits
+  const typedPhone = e.target.value.replace(/\D/g, '');
   const hiddenId = document.getElementById('customer-id-hidden');
   
   if(typedPhone === '') {
     hiddenId.value = '';
-    document.getElementById('customer-name').value = '';
     return;
   }
   
-  const match = customers.find(c => (c.phone || '').replace(/\D/g, '').includes(typedPhone));
+  const match = customers.find(c => (c.phone || '').replace(/\D/g, '') === typedPhone);
   if(match) {
     document.getElementById('customer-name').value = match.name;
-    hiddenId.value = match.id; // Store the ID
+    hiddenId.value = match.id; 
   } else {
-    hiddenId.value = ''; // No match, so it's a walk-in
-  }
-});
-document.getElementById('customer-name').addEventListener('change', (e) => {
-  const selectedId = e.target.value;
-  if(selectedId) {
-    const cust = customers.find(c => c.id === Number(selectedId));
-    if(cust) document.getElementById('customer-phone').value = cust.phone || '';
-  } else {
-    document.getElementById('customer-phone').value = '';
+    hiddenId.value = ''; 
   }
 });
 
@@ -8186,65 +8198,9 @@ function calcDiscount(subtotal){
   return { amount: 0, note: '' };
 }
 
-function renderHeldBills(){
-  const section = document.getElementById('held-bills-section');
-  const list = document.getElementById('held-bills-list');
-  
-  if(heldBills.length === 0){
-    section.style.display = 'none';
-    return;
-  }
-  
-  section.style.display = 'block';
-  document.querySelector('#held-bills-section h3').textContent = `Held Bills (${heldBills.length})`;
-  
-  list.innerHTML = heldBills.map(bill => {
-    const total = bill.cart.reduce((s,c)=>s+c.price*c.qty,0);
-    const itemCount = bill.cart.reduce((s,c)=>s+c.qty,0);
-    const time = new Date(bill.heldAt).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
-    
-    return `
-      <div class="held-bill-item" style="background:var(--bg-2); border:1px solid var(--border); border-radius:8px; padding:12px; display:flex; justify-content:space-between; align-items:center;">
-        <div>
-          <div style="font-weight:600; font-size:13px; color:var(--text-1);">${escapeHtml(bill.customerName || 'No Customer')}</div>
-          <div style="font-size:12px; color:var(--text-2); margin-top:4px;">${itemCount} item(s) • ${fmtCurrency(total)} • ${time}</div>
-        </div>
-        <div style="display:flex; gap:8px;">
-          <button class="btn-outline" style="padding:4px 8px; font-size:12px;" onclick="restoreHeldBill(${bill.id})">Restore</button>
-          <button class="btn-outline" style="padding:4px 8px; font-size:12px; color:var(--red); border-color:rgba(232,90,90,0.3);" onclick="deleteHeldBill(${bill.id})">Delete</button>
-        </div>
-      </div>
-    `;
-  }).join('');
-}
 
-function restoreHeldBill(billId){
-  const bill = heldBills.find(b => b.id === billId);
-  if(!bill) return;
-  
-  if(cart.length > 0){
-    if(!confirm('Current cart will be replaced. Continue?')) return;
-  }
-  
-  cart = [...bill.cart];
-  document.getElementById('customer-name').value = bill.customerName || '';
-  document.getElementById('customer-phone').value = bill.customerPhone || '';
-  document.getElementById('balance-remaining').value = bill.balanceRemaining || '0';
-  
-  heldBills = heldBills.filter(b => b.id !== billId);
-  renderCartBadge();
-  renderCart();
-  renderHeldBills();
-  showToast('Bill restored successfully.');
-}
 
-function deleteHeldBill(billId){
-  if(!confirm('Delete this held bill?')) return;
-  
-  heldBills = heldBills.filter(b => b.id !== billId);
-  renderHeldBills();
-  showToast('Held bill deleted.');
-}
+
 
 function renderCart(){
   const container = document.getElementById('cart-items');
@@ -8296,10 +8252,8 @@ function renderCart(){
   } else {
     discRow.style.display = 'none';
   }
-  document.getElementById('sum-total').textContent = fmtCurrency(total);
-    document.getElementById('generate-invoice-btn').disabled = cart.length === 0;
-  // Labour only button is always enabled
-    document.getElementById('generate-invoice-btn').disabled = cart.length === 0;
+    document.getElementById('sum-total').textContent = fmtCurrency(total);
+  document.getElementById('generate-invoice-btn').disabled = cart.length === 0;
 }
 
 function changeCartQty(productId, delta){
